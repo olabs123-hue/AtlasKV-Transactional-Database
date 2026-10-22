@@ -1,0 +1,32 @@
+name: Reproducible benchmark (current source)
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'benchmarks/run_current_repository.sh'
+      - '.github/workflows/benchmark.yml'
+permissions:
+  contents: read
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake g++
+      - name: Run five measured repetitions
+        shell: bash
+        run: |
+          mkdir -p benchmark-artifacts
+          bash benchmarks/run_current_repository.sh 2>&1 | tee benchmark-artifacts/raw-runs.txt
+      - name: Record revision
+        run: |
+          echo "${GITHUB_SHA}" > benchmark-artifacts/commit-sha.txt
+          date -u +%Y-%m-%dT%H:%M:%SZ > benchmark-artifacts/finished-utc.txt
+      - name: Upload raw benchmark output
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-raw-results
+          path: benchmark-artifacts/
+          retention-days: 30

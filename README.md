@@ -117,6 +117,6 @@ ARCHITECTURE.md              Design decisions
 LICENSE                      MIT license
 ```
 
-## CV bullet (after you have personally built/tested and can explain it)
+## Technical summary
 
 **AtlasKV — Transactional Key-Value Store & Query Engine | C++17, CMake, GitHub Actions:** Implemented historical MVCC reads, optimistic multi-key transactions with conflict detection, secondary category indexes, query-plan selection, binary snapshot recovery, and automated concurrency tests; benchmarked 100,000 in-memory commits locally (machine-specific throughput).

@@ -2,7 +2,7 @@
 
 A self-contained educational storage-engine project demonstrating concepts relevant to database engineering: **multi-version reads (MVCC), optimistic transaction validation, secondary indexing, query-plan selection, snapshots, concurrency, and reproducible benchmarks**.
 
-> This is **not** FoundationDB, a distributed database, a production SQL engine, or a crash-durable transaction system. See [Limitations](#limitations).
+> This is **not** FoundationDB, a distributed database, or a production SQL engine. Standard \`Database\` transactions remain in-memory until a snapshot; a new experimental single-process \`DurableStore\` facade supports fsync-backed write-ahead logging. See [Limitations](#limitations).
 
 ## Quick start
 
@@ -76,6 +76,25 @@ Explicit binary snapshot save/load
 - **Snapshots:** `save_snapshot` writes the current records to a versioned binary format through a temporary file and rename. `load_snapshot` validates and replaces database state; it rejects corrupt/truncated input. The snapshot stores **current records only**, not historical MVCC revisions.
 - **Concurrency:** Mutex-protected state and tests with four writer threads.
 
+## Experimental durable WAL facade (new)
+
+`DurableStore` in `include/atlaskv/durable_store.hpp` and `src/durable_store.cpp` adds a **single-process**, append-only write-ahead log separate from the original `Database` API. It records a full batch in a length-delimited, CRC32-protected frame, synchronizes the frame before applying it to the in-memory database, and replays complete frames on reopening. An incomplete final record is truncated; corruption in a complete frame is rejected.
+
+```cpp
+#include "atlaskv/durable_store.hpp"
+atlaskv::DurableStore store("data/atlas.wal"); // directory must already exist
+store.put("account:1", {"accounts", "open"});
+store.apply({
+    {"account:1", atlaskv::Record{"accounts", "updated"}},
+    {"account:2", atlaskv::Record{"accounts", "active"}}
+});
+store.erase("account:2");
+```
+
+The [C++ CI run](https://github.com/olabs123-hue/AtlasKV-Transactional-Database/actions/runs/45593773692) covers restart replay, atomic multi-key batches, deletes, torn final records, checksum rejection and Unix process-exit recovery, as well as the existing MVCC/snapshot/concurrency suite. These are functional tests; **no production latency, durability under power loss, or multi-process throughput figures are claimed**.
+
+**Durability boundary:** Only writes made through a single `DurableStore` instance are logged; operations through a separate `Database` instance are not. This facade has no cross-process exclusive file lock, WAL compaction/checkpointing, parent-directory fsync on initial file creation, recovery under disk/media failure, or schema/version migrations. Do not open multiple writers on one WAL. For deployment, the log needs a persistent filesystem (not an ephemeral cloud container).
+
 ## Testing and benchmarks
 
 ```bash
@@ -89,7 +108,7 @@ Tests cover basic CRUD, read-your-writes, historical reads, conflicts, delete an
 
 ## Limitations
 
-1. **Not crash-durable per commit:** A successful transaction is only in memory until an explicit snapshot. No write-ahead log, fsync or crash-recovery guarantee. The temporary-file rename is not equivalent to durable commit.
+1. **Original Database transactions are not crash-durable per commit:** They remain in memory until an explicit snapshot. The separate \`DurableStore\` facade adds experimental per-batch WAL sync/replay, but does not make the original API or snapshots a fully crash-safe production storage engine.
 2. **Not serializable for range queries:** Transactional point reads and writes are validated, but `Database::query()` is not a transaction-scoped snapshot query and does not protect against range phantoms.
 3. **Unbounded MVCC history:** Old revisions are never garbage-collected during a running process; snapshot reload compacts to current state.
 4. **No distributed replication, sharding, SQL parser, cost-based planner, B+ tree, or storage pages.**
@@ -98,7 +117,7 @@ Tests cover basic CRUD, read-your-writes, historical reads, conflicts, delete an
 
 ## Suggested roadmap
 
-- **V3:** WAL with checksums, flush ordering, recovery and fault-injection tests.
+- **V3:** Experimental WAL facade with checksums, sync ordering, replay and crash-exit tests **implemented**; next add file locking, crash-consistent WAL creation, checkpointing/compaction and stronger fault injection.
 - **V4:** Transaction-scoped range reads with phantom detection and safe MVCC garbage collection.
 - **V5:** Index statistics and cost-based access-path selection, explain plans, and benchmark comparisons.
 - **V6:** Optional disk pages / B+ tree and concurrency profiling.
@@ -108,6 +127,9 @@ Tests cover basic CRUD, read-your-writes, historical reads, conflicts, delete an
 ```text
 include/atlaskv/database.hpp  Public API
 src/database.cpp             Storage, transactions, queries, snapshots
+include/atlaskv/durable_store.hpp   Experimental durable facade API
+src/durable_store.cpp        Checksummed sync-backed WAL/replay
+tests/test_durable_store.cpp  WAL recovery and corruption tests
 src/main.cpp                 Interactive CLI
 benchmarks/bench.cpp         Reproducible local benchmark
  tests/test_database.cpp     Automated regression tests
